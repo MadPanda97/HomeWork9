@@ -2,52 +2,97 @@ package main
 
 import (
 	"fmt"
-	"net/http"
+	"math/rand"
 	"sync"
 	"time"
 )
 
-func worker(id int, jobs <-chan string, wg *sync.WaitGroup) {
+func mailing(name string, ch <-chan string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for url := range jobs {
-		fmt.Printf("worker %d скачивает %s\n", id, url)
-
-		resp, err := http.Get(url)
-		if err != nil {
-			fmt.Printf("worker %d: ошибОЧКА %s: %v\n", id, url, err)
-			continue
-		}
-
-		fmt.Printf("Worker %d: %s -> статус %d\n", id, url, resp.StatusCode)
-		resp.Body.Close()
-		time.Sleep(time.Second * 3)
+	for msg := range ch {
+		fmt.Printf("[%s] Сообщение отправлено: %s\n", name, msg)
+		time.Sleep(time.Second)
 	}
 }
-func main() {
-	urls := []string{
-		"https://examplelhl.com",
-		"https://www.google.com",
-		"https://www.github.com",
-		"https://www.facebook.com",
-		"https://www.stackoverflow.com",
+
+func department(name string, out chan<- string, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for i := 0; i < 5; i++ {
+		msg := fmt.Sprintf("[%s] Уведомление #%d", name, i+1)
+		out <- msg
+		time.Sleep(time.Millisecond * time.Duration(rand.Intn(1000))) // Разное время отправки
 	}
+	close(out)
+}
 
-	const numWorkers = 3
-
-	jobs := make(chan string, len(urls))
+func fanIn(inputs ...<-chan string) <-chan string {
+	out := make(chan string)
 	var wg sync.WaitGroup
 
-	wg.Add(numWorkers)
-	for i := 1; i <= numWorkers; i++ {
-		go worker(i, jobs, &wg)
+	for _, ch := range inputs {
+		wg.Add(1)
+		go func(c <-chan string) {
+			defer wg.Done()
+			for msg := range c {
+				out <- msg
+			}
+		}(ch)
 	}
 
-	for _, url := range urls {
-		jobs <- url
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+
+	return out
+}
+
+func main() {
+	contacts := []string{"Арни", "Посвеж", "Жанна", "Кореец", "Жонас(Брат)", "Игорь Ким"}
+	message := []string{"Осторожно, возможно воспламенение, приготовьте огнетушитель!", "Произошел жирный доезд!!!", "Адилька сгорел"}
+
+	var wg sync.WaitGroup
+	messages := make([]chan string, len(contacts))
+
+	for i, name := range contacts {
+		messages[i] = make(chan string, len(messages))
+		wg.Add(1)
+		go mailing(name, messages[i], &wg)
 	}
-	close(jobs)
+
+	for _, msg := range message {
+		fmt.Println("🔹 Рассылаем:", msg)
+		for _, ch := range messages {
+			ch <- msg
+		}
+	}
+
+	for _, ch := range messages {
+		close(ch)
+	}
 
 	wg.Wait()
-	fmt.Println("я покакаль")
+	fmt.Println("Прежупреждение отправлено")
+
+	rand.Seed(time.Now().UnixNano())
+	
+	dept1 := make(chan string)
+	dept2 := make(chan string)
+	dept3 := make(chan string)
+
+	wg.Add(3)
+	go department(" Отдел продаж", dept1, &wg)
+	go department(" Отдел HR", dept2, &wg)
+	go department(" Техподдержка", dept3, &wg)
+
+	notifications := fanIn(dept1, dept2, dept3)
+
+	for msg := range notifications {
+		fmt.Println(" Получено уведомление:", msg)
+	}
+
+	wg.Wait()
+	fmt.Println(" Все отделы завершили рассылку")
 }
